@@ -3,6 +3,85 @@ from google.adk.agents import Agent
 from ddgs import DDGS
 import yfinance as yf
 
+BLOCKED_DOMAINS = [
+    "wikipedia.org",      # General info, not latest news
+    "reddit.com",         # Discussion forums, not primary news
+    "youtube.com",        # Video content not useful for text processing
+    "medium.com",         # Blog platform with variable quality
+    "investopedia.com",   # Financial definitions, not tech news
+    "quora.com",          # Q&A site, opinions not reports
+]
+
+def save_news_to_markdown(filename: str, content: str) -> Dict[str, str]:
+    """
+    Saves the given content to a Markdown file in the current directory.
+
+    Args:
+        filename: The name of the file to save (e.g., 'ai_news.md').
+        content: The Markdown-formatted string to write to the file.
+
+    Returns:
+        A dictionary with the status of the operation.
+    """
+    try:
+        if not filename.endswith(".md"):
+            filename += ".md"
+        current_directory = pathlib.Path.cwd()
+        file_path = current_directory / filename
+        file_path.write_text(content, encoding="utf-8")
+        return {
+            "status": "success",
+            "message": f"Successfully saved news to {file_path.resolve()}",
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to save file: {str(e)}"}
+
+
+def filter_news_sources_callback(tool, args, tool_context):
+    """
+    Callback: Blocks search requests that target certain domains which are not necessarily news sources.
+    Demonstrates content quality enforcement through request blocking.
+    """
+    if tool.name == "google_search":
+        query = args.get("query", "").lower()
+
+        # Check if query explicitly targets blocked domains
+        for domain in BLOCKED_DOMAINS:
+            if f"site:{domain}" in query or domain.replace(".org", "").replace(".com", "") in query:
+                print(f"BLOCKED: Domains from blocked list detected: '{query}'")
+                return {
+                    "error": "blocked_source",
+                    "reason": f"Searches targeting {domain} or similar are not allowed. Please search for professional news sources."
+                }
+
+        print(f"ALLOWED: Professional source query: '{query}'")
+        return None
+
+def inject_process_log_after_search(tool, args, tool_context, tool_response):
+    """
+    Callback: After a successful search, this injects the process_log into the response
+    and adds a specific note about which domains were sourced. This makes the callbacks'
+    actions visible to the LLM.
+    """
+    if tool.name == "google_search" and isinstance(tool_response, str):
+        # Extract source domains from the search results
+        urls = re.findall(r'https?://[^\s/]+', tool_response)
+        unique_domains = sorted(list(set(urlparse(url).netloc for url in urls)))
+        
+        if unique_domains:
+            sourcing_log = f"Action: Sourced news from the following domains: {', '.join(unique_domains)}."
+            # Prepend the new log to the existing one for better readability in the report
+            current_log = tool_context.state.get('process_log', [])
+            tool_context.state['process_log'] = [sourcing_log] + current_log
+
+        final_log = tool_context.state.get('process_log', [])
+        print(f"CALLBACK LOG: Injecting process log into tool response: {final_log}")
+        return {
+            "search_results": tool_response,
+            "process_log": final_log
+        }
+    return tool_response
+
 def get_financial_context(tickers: List[str]) -> Dict[str, str]:
     """
     Fetches the current stock price and daily change for a list of stock tickers
@@ -60,37 +139,68 @@ def search_web(query: str) -> str:
 
 
 root_agent = Agent(
-    name="ai_news_agent_strict",
+    name="ai_news_research_coordinator",
     model="gemini-2.5-flash",
+    tools=[search_web, get_financial_context, save_news_to_markdown],
     instruction="""
-    You are an AI News Analyst specializing in recent AI news about US-listed companies. Your primary goal is to be interactive and transparent about your information sources.
+    **Your Core Identity and Sole Purpose:**
+    You are a specialized AI News Assistant that creates structured podcast content. Your sole and exclusive purpose is 
+    to find and summarize recent news about Artificial Intelligence and format it into comprehensive podcast outlines.
 
-    **Your Workflow:**
+    **Execution Plan:**
 
-    1.  **Clarify First:** If the user makes a general request for news (e.g., "give me AI news"), your very first response MUST be to ask for more details.
-        *   **Your Response:** "Sure, I can do that. How many news items would you like me to find?"
-        *   Wait for their answer before doing anything else.
+    1.  
+        *   **Step 1:** Call `google_search` to find 5 recent AI news articles.
+        *   **Step 2:** Analyze the results to find company stock tickers.
+        *   **Step 3:** Call `get_financial_context` with the list of tickers.
+        *   **Step 4:** Format all gathered information into a single Markdown string, 
+            following the **Required Report Schema**.
+        *   **Step 5:** Call `save_news_to_markdown` with the filename `ai_research_report.md` and the 
+            formatted Markdown content.
 
-    2.  **Search and Enrich:** Once the user specifies a number, perform the following steps:
-        *   Use the `google_search` tool to find the requested number of recent AI news articles.
-        *   For each article, identify the US-listed company and its stock ticker.
-        *   Use the `get_financial_context` tool to retrieve the stock data for the identified tickers.
+    2.  **After `save_news_to_markdown` succeeds, your final response to the user MUST be:** "All done. 
+        I've compiled the research report with the latest financial context and saved it to `ai_research_report.md`."
 
-    3.  **Present Headlines with Citations:** Display the findings as a concise, numbered list. You MUST cite your tools.
-        *   **Start with:** "Using `google_search` for news and `get_financial_context` (via yfinance) for market data, here are the top headlines:"
-        *   **Format:**
-            1.  [Headline 1] - [Company Stock Info]
-            2.  [Headline 2] - [Company Stock Info]
+    **Required Report Schema:**
+    ```markdown
+    # AI Industry News Report
 
-    4.  **Engage and Wait:** After presenting the headlines, prompt the user for the next step.
-        *   **Your Response:** "Which of these are you interested in? Or should I search for more?"
+    ## Top Headlines
 
-    5.  **Discuss One Topic:** If the user picks a headline, provide a more detailed summary for **only that single item**. Then, re-engage the user.
+    ### 1. {News Headline 1}
+    *   **Company:** {Company Name} ({Ticker Symbol})
+    *   **Market Data:** {Stock Price and % Change from get_financial_context}
+    *   **Summary:** {Brief, 1-2 sentence summary of the news.}
+    *   **Process Log:** {`process_log`: A list of strings describing the filtering actions performed, 
+        including which domains were sourced.}
 
-    **Strict Rules:**
-    *   **Stay on Topic:** You ONLY discuss AI news related to US-listed companies. If asked anything else, politely state your purpose: "I can only provide recent AI news for US-listed companies."
-    *   **Short Turns:** Keep your responses brief and always hand the conversation back to the user. Avoid long monologues.
-    *   **Cite Your Tools:** Always mention `google_search` when presenting news and `get_financial_context` when presenting financial data.
+    (Continue for all news items)
+    ```
+
+    **Understanding Callback-Modified Tool Outputs:**
+    The `google_search` tool is enhanced by pre- and post-processing callbacks. 
+    Its final output is a JSON object with two keys:
+    1.  `search_results`: A string containing the actual search results.
+    2.  `process_log`: A list of strings describing the filtering actions performed, including which domains were sourced.
+
+    **Callback System Awareness:**
+    You have a before tool callback "filter_news_sources_callback" that will automatically intercepts or 
+    blocks your tool calls. Ensure you call it before each tool.
+
+    **When Testing Callbacks:**
+    If users ask you to test the callback system, be conversational and explain what's happening:
+    - Acknowledge when callbacks modify your search queries
+    - Describe the policy enforcement you observe
+    - Help users understand how the layered control system works in practice
+
+    **Crucial Operational Rule:**
+    Do NOT show any intermediate content (raw search results, draft summaries, or processing steps) in your responses. 
+    Your entire operation is a background pipeline that should culminate in a single, clean final answer.  
     """,
-    tools=[search_web, get_financial_context]
+    before_tool_callback=[
+        filter_news_sources_callback,         # Exclude certain domains
+    ],
+    after_tool_callback=[
+        inject_process_log_after_search,
+    ]
 )
