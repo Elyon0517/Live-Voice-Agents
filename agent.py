@@ -45,7 +45,6 @@ def filter_news_sources_callback(tool, args, tool_context):
     if tool.name == "google_search":
         query = args.get("query", "").lower()
 
-        # Check if query explicitly targets blocked domains
         for domain in BLOCKED_DOMAINS:
             if f"site:{domain}" in query or domain.replace(".org", "").replace(".com", "") in query:
                 print(f"BLOCKED: Domains from blocked list detected: '{query}'")
@@ -64,13 +63,11 @@ def inject_process_log_after_search(tool, args, tool_context, tool_response):
     actions visible to the LLM.
     """
     if tool.name == "google_search" and isinstance(tool_response, str):
-        # Extract source domains from the search results
         urls = re.findall(r'https?://[^\s/]+', tool_response)
         unique_domains = sorted(list(set(urlparse(url).netloc for url in urls)))
         
         if unique_domains:
             sourcing_log = f"Action: Sourced news from the following domains: {', '.join(unique_domains)}."
-            # Prepend the new log to the existing one for better readability in the report
             current_log = tool_context.state.get('process_log', [])
             tool_context.state['process_log'] = [sourcing_log] + current_log
 
@@ -96,26 +93,20 @@ def get_financial_context(tickers: List[str]) -> Dict[str, str]:
     financial_data: Dict[str, str] = {}
     for ticker_symbol in tickers:
         try:
-            # Create a Ticker object
             stock = yf.Ticker(ticker_symbol)
 
-            # Fetch the info dictionary
             info = stock.info
 
-            # Safely access the required data points
             price = info.get("currentPrice") or info.get("regularMarketPrice")
             change_percent = info.get("regularMarketChangePercent")
 
             if price is not None and change_percent is not None:
-                # Format the percentage and the final string
                 change_str = f"{change_percent * 100:+.2f}%"
                 financial_data[ticker_symbol] = f"${price:.2f} ({change_str})"
             else:
-                # Handle cases where the ticker is valid but data is missing
                 financial_data[ticker_symbol] = "Price data not available."
 
         except Exception:
-            # This handles invalid tickers or other yfinance errors gracefully
             financial_data[ticker_symbol] = "Invalid Ticker or Data Error"
 
     return financial_data

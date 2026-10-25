@@ -76,7 +76,6 @@ async def generate_podcast_audio(podcast_script: str, tool_context: ToolContext,
         if not filename.endswith(".wav"):
             filename += ".wav"
 
-        # ** BUG FIX **: This logic now runs for all cases, not just when the extension is added.
         current_directory = pathlib.Path.cwd()
         file_path = current_directory / filename
         wave_file(str(file_path), data)
@@ -98,7 +97,6 @@ def get_financial_context(tickers: List[str]) -> Dict[str, str]:
     """
     financial_data: Dict[str, str] = {}
 
-    # Filter out invalid tickers upfront
     valid_tickers = [ticker.upper().strip() for ticker in tickers 
                     if ticker and ticker.upper() not in ['N/A', 'NA', '']]
     
@@ -174,13 +172,11 @@ def inject_process_log_after_search(tool, args, tool_context, tool_response):
     actions visible to the LLM.
     """
     if tool.name == "google_search" and isinstance(tool_response, str):
-        # Extract source domains from the search results
         urls = re.findall(r'https?://[^\s/]+', tool_response)
         unique_domains = sorted(list(set(urlparse(url).netloc for url in urls)))
         
         if unique_domains:
             sourcing_log = f"Action: Sourced news from the following domains: {', '.join(unique_domains)}."
-            # Prepend the new log to the existing one for better readability in the report
             current_log = tool_context.state.get('process_log', [])
             tool_context.state['process_log'] = [sourcing_log] + current_log
 
