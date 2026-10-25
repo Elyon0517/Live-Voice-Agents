@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you discuss or build on this project, please cite its original repository."
+type: software
+title: "Live-Voice-Agents"
+authors:
+  - name: "Elyon0517"
+repository-code: "https://github.com/Elyon0517/Live-Voice-Agents"
+url: "https://github.com/Elyon0517/Live-Voice-Agents"
+license: MIT
